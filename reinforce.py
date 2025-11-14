@@ -95,11 +95,12 @@ class TabularStateValueFunction:
 
     def evaluate(self, state):
         """Compute value in given state"""
-        # [...]
+        return self.psi[state]
 
     def train(self, state, target):
         """Train at state for observed target"""
-        # [...]
+        td_error = target - self.psi[state]
+        self.psi[state] += self.learning_rate * td_error
 
 
 class TabularPolicy:
@@ -110,13 +111,18 @@ class TabularPolicy:
         self.nb_actions = nb_actions
         self.theta = np.outer(np.ones(nb_states), init_theta)
 
-    def pi(self):
+    def pi(self, state):
         """Returns probability distribution over actions at given state"""
-        # [...]
+        preferences = self.theta[state] - np.max(self.theta[state])
+        exp_preferences = np.exp(preferences)
+        return exp_preferences / np.sum(exp_preferences)
 
-    def update(self):
+    def update(self, state, action, discount, delta):
         """Update policy at state-action pair for a given discounted return"""
-        # [...]
+        probs = self.pi(state)
+        grad = -probs
+        grad[action] += 1.0
+        self.theta[state] += self.learning_rate * discount * delta * grad
 
 
 # %% Run environment
@@ -144,7 +150,7 @@ def policy(st, pi):
 
 
 # Average reward obtained after a given number of training episodes
-hist_R = np.zeros(episodes)
+hist_R_base = np.zeros(episodes)
 
 for _rep in range(repeats):
     # Instantiate tabular state-value function
@@ -158,19 +164,59 @@ for _rep in range(repeats):
         init_theta=init_theta,
     )
 
-    for _ep in range(episodes):
+    for ep in range(episodes):
         traj, T = generate_episode(env, policy, pi)
-        # trajectory is of the form
-        # [(state, reward, done, action), ...]
+        returns = np.zeros(T)
+        G = 0.0
+        for t in reversed(range(T)):
+            reward = traj[t + 1][1]
+            G = reward + gamma * G
+            returns[t] = G
 
-        # [...]
+        total_reward = sum(step[1] for step in traj[1:])
+        hist_R_base[ep] += total_reward
 
-hist_R = hist_R / repeats
+        for t in range(T):
+            state = traj[t][0]
+            action = traj[t][3]
+            discount = gamma**t
+            baseline_value = v_hat.evaluate(state)
+            delta = returns[t] - baseline_value
+            v_hat.train(state, returns[t])
+            pi.update(state, action, discount, delta)
 
-# %% Save results
+hist_R_base = hist_R_base / repeats
 
-hist_R_base = hist_R
-hist_R_nobase = hist_R
+# Repeat the experiment without a baseline
+hist_R_nobase = np.zeros(episodes)
+
+for _rep in range(repeats):
+    pi = TabularPolicy(
+        learning_rate=alpha_theta,
+        nb_states=env.nb_states,
+        nb_actions=env.nb_actions,
+        init_theta=init_theta,
+    )
+
+    for ep in range(episodes):
+        traj, T = generate_episode(env, policy, pi)
+        returns = np.zeros(T)
+        G = 0.0
+        for t in reversed(range(T)):
+            reward = traj[t + 1][1]
+            G = reward + gamma * G
+            returns[t] = G
+
+        total_reward = sum(step[1] for step in traj[1:])
+        hist_R_nobase[ep] += total_reward
+
+        for t in range(T):
+            state = traj[t][0]
+            action = traj[t][3]
+            discount = gamma**t
+            pi.update(state, action, discount, returns[t])
+
+hist_R_nobase = hist_R_nobase / repeats
 
 # %% Plot results
 
